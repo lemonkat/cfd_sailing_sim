@@ -84,32 +84,43 @@ class Water(pm.Space):
     ) -> None:
         self.objects[obj] = air, surf, deep
 
+    # in grid coordinates
+    def shift(self, i: int, j: int) -> None:
+        for fld in [self.air, self.surf, self.deep]:
+            fld.shift(i, j)
+        shift_vec = pm.Vec2d(i, j) / self.scale
+        for obj in self.bodies:
+            obj.position += shift_vec
+
+    def center(self) -> None:
+        if (self.main_obj.position.x - self.shape[0] // 2) ** 2 + (self.main_obj.position.y - self.shape[1] // 2) ** 2 < 25:
+            return
+        
+        main_obj_pos = self.air.pm_to_grid(self.main_obj.position)
+        i_shift = int(main_obj_pos.x - self.shape[0] // 2)
+        j_shift = int(main_obj_pos.y - self.shape[1] // 2)
+        
+        self.shift(i_shift, j_shift)
+        
+
     def step(self, dt: float):
         # any way to multi-thread this bit here?
         self.air.step(dt)
         self.surf.step(dt)
         self.deep.step(dt)
+        print(list(self.objects.items()))
         for obj, data in self.objects.items():
-            for (shape, weight), fld in zip(data, [self.air, self.surf, self.deep]):
-                fld.apply_forces(obj, shape, weight)
+            for shapes, fld in zip(data, [self.air, self.surf, self.deep]):
+                for shape, weight in shapes:
+                    fld.apply_forces(obj, shape, weight)
 
         super().step(dt)
 
-        i_shift = 0 if abs(self.main_obj.position.x - self.shape[0] // 2) < 5 else int(self.main_obj.position.x - self.shape[0] // 2)
-        j_shift = 0 if abs(self.main_obj.position.y - self.shape[1] // 2) < 5 else int(self.main_obj.position.y - self.shape[1] // 2)
-        
-        for fld in [self.air, self.surf, self.deep]:
-            fld.roll(-i_shift, -j_shift)
-            
-        for body in self.bodies:
-            body.position = body.position - pm.Vec2d(i_shift, j_shift)
+        self.center()
 
-        self.air.induce(self.wind)
-        self.surf.induce(self.current)
-        self.deep.induce(self.current)
 
 if __name__ == "__main__":
-    space = Water((500, 500), 10.0, pm.Vec2d(0, -3))
+    space = Water((500, 500), scale=10.0, current=pm.Vec2d(0, -3))
     hull = pm.Body()
     r, s = 3, 40
     hull_poly = [[r * np.cos(i * 2 * np.pi / s), r * np.sin(i * 2 * np.pi / s)] for i in range(s)]
@@ -134,7 +145,7 @@ if __name__ == "__main__":
     # rudder_hinge = Hinge(hull, rudder, rudder_a)
     space.add_obj(
         hull, 
-        surf=[(a, b, 0.75) for a, b in util.poly_sides(hull_poly)],
+        surf=[(hull_shape, 0.75)],
         # deep=[keel]
     )
     # space.add_obj(
@@ -156,7 +167,7 @@ if __name__ == "__main__":
     clock = pg.time.Clock()
     running = True
 
-    space.surf.vel[...] = [5, 0] + util.RNG.uniform(-1, 1, space.surf.vel.shape)
+    # space.surf.vel[...] = [5, 0] + util.RNG.uniform(-1, 1, space.surf.vel.shape)
 
     def draw():
         shift = hull.position

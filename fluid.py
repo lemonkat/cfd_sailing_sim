@@ -19,6 +19,25 @@ INT = tf.int32
 
 R90 = tf.constant([[0, -1], [1, 0]], dtype=INT)
 
+"""
+all ops used:
+0. tf.math.floor
+1. tf.math.ceil
+2. subtraction
+3. tf.range
+4. tf.cast
+5. tf.stack
+6. tf.scatter_nd
+7. addition
+8. tf.roll
+9. tf.tensor_scatter_nd_add
+10. tf.reduce_sum
+11. tf.concat
+12. tf.fill
+13. tf.slice
+
+"""
+
 @tf.function
 def frac(x: tf.Tensor) -> tf.Tensor:
     return x - floor(x)
@@ -128,16 +147,35 @@ def get_forces(
 
 @tf.function
 def step(vel_i: tf.Tensor, vel_j: tf.Tensor, dens: tf.Tensor, dt: tf.Tensor) -> tuple[tuple[tf.Tensor, tf.Tensor], tf.Tensor]:
-    vel_i_1 = advect(vel_i, vel_i, vel_j, dt)
-    vel_j_1 = advect(vel_j, vel_i, vel_j, dt)
+    # vel_i_1 = advect(vel_i, vel_i, vel_j, dt)
+    # vel_j_1 = advect(vel_j, vel_i, vel_j, dt)
 
-    pv_i, pv_j = project(dens, dt, 10)
-    vel_i = vel_i_1 + pv_i
-    vel_j = vel_j_1 + pv_j
+    # pv_i, pv_j = project(dens, dt, 10)
+    # vel_i = vel_i_1 + pv_i
+    # vel_j = vel_j_1 + pv_j
+    
+    # dens = advect(dens, vel_i, vel_j, dt)
+
+    # return (vel_i, vel_j), dens
+
+    # advect density and momentum - not density and velocity
+    mtm_i, mtm_j = vel_i * dens, vel_j * dens
+
+    mtm_i_1, mtm_j_1 = advect(mtm_i,  vel_i, vel_j, dt), advect(mtm_j,  vel_i, vel_j, dt)
     
     dens = advect(dens, vel_i, vel_j, dt)
 
+    pv_i, pv_j = project(dens, dt, 100)
+
+    vel_i = mtm_i_1 / dens + pv_i
+    vel_j = mtm_j_1 / dens + pv_j
+
     return (vel_i, vel_j), dens
+ 
+
+class StepModel(tf.keras.Model):
+    def call(self, inputs):
+        return step(*inputs)
 
 def shape_to_rrcc(obj: pm.Body, shape: pm.Shape, scale: float, loc: pm.Vec2d) -> tuple[tf.Tensor, tf.Tensor]:
     l2w = obj.local_to_world
@@ -181,7 +219,7 @@ def shift(inputs, shift, axes, pad_val = 0):
     return ret    
 
 class Fluid:
-    def __init__(self, shape: tuple[int, int], current: pm.Vec2d, loc: pm.Vec2d = pm.Vec2d(0, 0), scale: float = 1.0):
+    def __init__(self, shape: tuple[int, int], current: pm.Vec2d, loc: tuple[int, int] = (0, 0), scale: float = 1.0):
         self.shape = shape
         self.current = current
         self.vel_i = tf.Variable(tf.cast(tf.fill(shape, current.x), dtype=FLOAT))
@@ -194,7 +232,7 @@ class Fluid:
 
     def run(self, steps: int, dt: float = 0.1) -> None:
         vel_i, vel_j, dens = self.vel_i, self.vel_j, self.dens
-        
+
         for _ in range(steps):
             (vel_i, vel_j), dens = step(vel_i, vel_j, dens, tf.constant(dt, dtype=FLOAT))
 
@@ -224,16 +262,16 @@ class Fluid:
 
     # "move" this field to be centered around position
     # pos is in PM-coordinates
-    def center_on(self, pos: pm.Vec2d) -> None:
-        i, j = util.to_int(pos) - self.loc
+    def shift(self, i: int, j: int) -> None:
+        shifts = [i, j]
         axes = [0, 1]
-        shifts = [int(i), int(j)]
+        
 
         self.vel_i.assign(shift(self.vel_i, shifts, axes, ctt(self.current.x, dtype=FLOAT)))
         self.vel_j.assign(shift(self.vel_j, shifts, axes, ctt(self.current.y, dtype=FLOAT)))
         self.dens.assign(shift(self.dens, shifts, axes, ctt(1.0, dtype=FLOAT)))
 
-        self.loc = util.to_int(pos)
+        self.loc = self.loc[0] + i, self.loc[1] + j
 
     def pm_to_grid(self, pos: pm.Vec2d) -> pm.Vec2d:
         return (pos - self.loc) / self.scale
@@ -259,8 +297,8 @@ class Fluid:
             rr, 
             cc,
             ctt(self.scale, dtype=FLOAT),
-            ctt(self.loc.x, dtype=FLOAT),
-            ctt(self.loc.y, dtype=FLOAT),
+            ctt(self.loc[0], dtype=FLOAT),
+            ctt(self.loc[1], dtype=FLOAT),
         )
         force = pm.Vec2d(force_i.numpy(), force_j.numpy())
         obj.apply_force_at_world_point(force, obj.center_of_gravity)
@@ -278,7 +316,7 @@ if __name__ == "__main__":
     space.damping = 0.95
     wing = pm.Body(body_type=pm.Body.DYNAMIC)
     
-    wing_shape = pm.Segment(wing, pm.Vec2d(-20, 0), pm.Vec2d(20, 0), 0.1)
+    wing_shape = pm.Segment(wing, pm.Vec2d(-80, 0), pm.Vec2d(80, 0), 0.1)
     
     wing_shape.density = 10.0
     wing.position = pm.Vec2d(0, 0)
@@ -287,7 +325,7 @@ if __name__ == "__main__":
 
     space.add(wing, wing_shape)
 
-    fl = Fluid([500, 500], pm.Vec2d(0, 0), pm.Vec2d(-250, -250), 1.0)
+    fl = Fluid([1000, 1000], pm.Vec2d(0, 0), (-500, -500), 1.0)
     
     pg.init()
     surface = pg.display.set_mode((1000, 1000))
@@ -312,7 +350,7 @@ if __name__ == "__main__":
                 fl.apply_forces(wing, wing_shape, 0.3)
 
         fl.draw(surface, 40)
-        print(str(wing.position), str(wing.angular_velocity))
+        # print(str(wing.position), str(wing.angular_velocity))
 
         display_scale = surface.get_width() / fl.shape[0]
 

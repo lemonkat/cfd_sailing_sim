@@ -66,12 +66,14 @@ def draw_vec_field(surface: pg.Surface, field: np.ndarray[np.float32], arrow_sca
     i_scale = surface.get_width() / field.shape[0]
     j_scale = surface.get_height() / field.shape[1]
 
+    center_shfit = -pg.Vector2(i_scale / 2, j_scale / 2)
+
     for i, j in np.ndindex(field.shape[:2]):
         di, dj = field[i, j]
         draw_arrow(
             surface, 
-            pg.Vector2(np.floor(i * i_scale), np.floor(j * j_scale)),
-            pg.Vector2(np.floor((i + di * arrow_scale) * i_scale), np.floor((j + dj * arrow_scale) * j_scale)),
+            center_shfit + pg.Vector2(np.floor(i * i_scale), np.floor(j * j_scale)),
+            center_shfit + pg.Vector2(np.floor((i + di * arrow_scale) * i_scale), np.floor((j + dj * arrow_scale) * j_scale)),
             color,
         )
 

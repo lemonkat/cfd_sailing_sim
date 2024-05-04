@@ -35,7 +35,6 @@ all ops used:
 11. tf.concat
 12. tf.fill
 13. tf.slice
-
 """
 
 @tf.function
@@ -73,21 +72,23 @@ def grid(arr: tf.Tensor, *tgt_shape: list[int]) -> tf.Tensor:
 
 @tf.function
 def advect(field: tf.Tensor, vel_i: tf.Tensor, vel_j: tf.Tensor, dt: tf.Tensor) -> tf.Tensor:
-    tgt_i = vel_i * dt + tf.cast(tf.range(0, field.shape[0], 1, dtype=INT), dtype=FLOAT)[:, None]
-    tgt_j = vel_j * dt + tf.cast(tf.range(0, field.shape[1], 1, dtype=INT), dtype=FLOAT)[None, :]
+    field_shape = tf.shape(field, out_type=INT)
 
-    f_i = tf.cast(tf.math.floor(tgt_i), INT) % field.shape[0]
-    f_j = tf.cast(tf.math.floor(tgt_j), INT) % field.shape[1]
-    c_i = tf.cast(tf.math.ceil(tgt_i), INT) % field.shape[0]
-    c_j = tf.cast(tf.math.ceil(tgt_j), INT) % field.shape[1]
+    tgt_i = vel_i * dt + tf.cast(tf.range(0, field_shape[0], 1, dtype=INT), dtype=FLOAT)[:, None]
+    tgt_j = vel_j * dt + tf.cast(tf.range(0, field_shape[1], 1, dtype=INT), dtype=FLOAT)[None, :]
+
+    f_i = tf.cast(tf.math.floor(tgt_i), INT) % field_shape[0]
+    f_j = tf.cast(tf.math.floor(tgt_j), INT) % field_shape[1]
+    c_i = tf.cast(tf.math.ceil(tgt_i), INT) % field_shape[0]
+    c_j = tf.cast(tf.math.ceil(tgt_j), INT) % field_shape[1]
 
     frac_i = tgt_i - tf.math.floor(tgt_i)
     frac_j = tgt_j - tf.math.floor(tgt_j)
 
-    ff = tf.scatter_nd(tf.stack([f_i, f_j], axis=2), ((1 - frac_i) * (1 - frac_j)) * field, shape=field.shape)
-    fc = tf.scatter_nd(tf.stack([f_i, c_j], axis=2), ((1 - frac_i) * frac_j) * field, shape=field.shape)
-    cf = tf.scatter_nd(tf.stack([c_i, f_j], axis=2), (frac_i * (1 - frac_j)) * field, shape=field.shape)
-    cc = tf.scatter_nd(tf.stack([c_i, c_j], axis=2), (frac_i * frac_j) * field, shape=field.shape)
+    ff = tf.scatter_nd(tf.stack([f_i, f_j], axis=2), ((1 - frac_i) * (1 - frac_j)) * field, shape=field_shape)
+    fc = tf.scatter_nd(tf.stack([f_i, c_j], axis=2), ((1 - frac_i) * frac_j) * field, shape=field_shape)
+    cf = tf.scatter_nd(tf.stack([c_i, f_j], axis=2), (frac_i * (1 - frac_j)) * field, shape=field_shape)
+    cc = tf.scatter_nd(tf.stack([c_i, c_j], axis=2), (frac_i * frac_j) * field, shape=field_shape)
 
     return ff + fc + cf + cc
 
@@ -146,7 +147,7 @@ def get_forces(
     return (fvel_i, fvel_j), ((force_i, force_j), torque)
 
 @tf.function
-def step(vel_i: tf.Tensor, vel_j: tf.Tensor, dens: tf.Tensor, dt: tf.Tensor) -> tuple[tuple[tf.Tensor, tf.Tensor], tf.Tensor]:
+def step(vel_i: tf.Tensor, vel_j: tf.Tensor, dens: tf.Tensor, dt: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
     # vel_i_1 = advect(vel_i, vel_i, vel_j, dt)
     # vel_j_1 = advect(vel_j, vel_i, vel_j, dt)
 
@@ -170,12 +171,30 @@ def step(vel_i: tf.Tensor, vel_j: tf.Tensor, dens: tf.Tensor, dt: tf.Tensor) -> 
     vel_i = mtm_i_1 / dens + pv_i
     vel_j = mtm_j_1 / dens + pv_j
 
-    return (vel_i, vel_j), dens
+    return vel_i, vel_j, dens
  
 
-class StepModel(tf.keras.Model):
-    def call(self, inputs):
-        return step(*inputs)
+# class StepModel(tf.keras.Model):
+#     def call(self, vel_i, vel_j, dens, dt):
+#         return step(vel_i, vel_j, dens, dt)
+
+# def get_optimized_step_model(shape):
+#     def representative_dataset():
+#         zero = ctt(np.zeros(shape), dtype=FLOAT)
+#         high = ctt(np.full(shape, 10), dtype=FLOAT)
+#         low = ctt(np.full(shape, -10), dtype=FLOAT)
+#         yield high, high, high
+#         yield high, low, high
+#         yield low, high, high
+#         yield low, low, high
+#         yield high, high, zero
+#         yield high, low, zero
+#         yield low, high, zero
+#         yield low, low, zero
+#     converter = tf.lite.TFLiteConverter.from_keras_model(StepModel())
+#     converter.optimizations = [tf.lite.Optimize.DEFAULT]
+#     converter.representative_dataset = representative_dataset
+#     return converter.convert()
 
 def shape_to_rrcc(obj: pm.Body, shape: pm.Shape, scale: float, loc: pm.Vec2d) -> tuple[tf.Tensor, tf.Tensor]:
     l2w = obj.local_to_world
@@ -234,14 +253,14 @@ class Fluid:
         vel_i, vel_j, dens = self.vel_i, self.vel_j, self.dens
 
         for _ in range(steps):
-            (vel_i, vel_j), dens = step(vel_i, vel_j, dens, tf.constant(dt, dtype=FLOAT))
+            vel_i, vel_j, dens = step(vel_i, vel_j, dens, tf.constant(dt, dtype=FLOAT))
 
         self.vel_i.assign(vel_i)
         self.vel_j.assign(vel_j)
         self.dens.assign(dens)
 
     def step(self, dt: float = 0.1) -> None:
-        (vel_i, vel_j), dens = step(self.vel_i, self.vel_j, self.dens, tf.constant(dt, dtype=FLOAT))
+        vel_i, vel_j, dens = step(self.vel_i, self.vel_j, self.dens, tf.constant(dt, dtype=FLOAT))
 
         self.vel_i.assign(vel_i)
         self.vel_j.assign(vel_j)
@@ -307,16 +326,12 @@ class Fluid:
         self.vel_j.assign(vel_j)
 
 if __name__ == "__main__":
-    # for i in range(250):
-    #     for j in range(250):
-    #         f.vel[i, j] = np.array([125 - j, i - 125], dtype=np.float64) * 0.5#  if np.sqrt((i - 125) ** 2 + (j - 125) ** 2) < 100 else [0, 0]
-    # # f.vel[30: 70, 30: 70] = [10, 10]
-    # f.dens[75: 175, 75: 175] = 10
+    
     space = pm.Space()
     space.damping = 0.95
     wing = pm.Body(body_type=pm.Body.DYNAMIC)
     
-    wing_shape = pm.Segment(wing, pm.Vec2d(-80, 0), pm.Vec2d(80, 0), 0.1)
+    wing_shape = pm.Segment(wing, pm.Vec2d(-30, 0), pm.Vec2d(30, 0), 0.1)
     
     wing_shape.density = 10.0
     wing.position = pm.Vec2d(0, 0)
@@ -325,19 +340,14 @@ if __name__ == "__main__":
 
     space.add(wing, wing_shape)
 
-    fl = Fluid([1000, 1000], pm.Vec2d(0, 0), (-500, -500), 1.0)
+    fl = Fluid([500, 500], pm.Vec2d(0, 0), (-250, -250), 1.0)
     
     pg.init()
     surface = pg.display.set_mode((1000, 1000))
 
     clock = pg.time.Clock()
     running = True
-    i = 0
     while running:
-        # if i >= 10:
-        #     break
-        # poll for events
-        # pygame.QUIT event means the user clicked X to close your window
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 running = False
@@ -350,36 +360,9 @@ if __name__ == "__main__":
                 fl.apply_forces(wing, wing_shape, 0.3)
 
         fl.draw(surface, 40)
-        # print(str(wing.position), str(wing.angular_velocity))
 
-        display_scale = surface.get_width() / fl.shape[0]
-
-        # print(f)
-
-        draw_util.draw_shape(surface, wing, wing_shape, display_scale)
-        # a = wing.position * scale * display_scale + pm.Vec2d(*surface.get_size()) / 2
-        # b = a + fl * scale * display_scale * 0.5
-        # draw_util.draw_arrow(surface, a, b, [255, 255, 0])
-
-        # pm_scale = scale * surface.get_width() / fl.shape[0]
-        # for a, b in util.poly_sides(map(wing.local_to_world, wing_poly)):
-        #     pg.draw.line(surface, [0, 0, 0], util.to_int(a * pm_scale), util.to_int(b * pm_scale))
-        # pg.draw.line(
-        #     surface, 
-        #     [0, 0, 0], 
-        #     util.to_int(a * surface.get_width() / fl.shape[0]), 
-        #     util.to_int(b * surface.get_width() / fl.shape[0])
-        # )
-        # draw_util.draw_arrow(
-        #     surface, 
-        #     # util.to_int( / 2 * surface.get_width() / fl.shape[0]),
-        #     u# til.to_int(((a + b) / 2 + 0.5 * f) * surface.get_width() / fl.shape[0]),
-        #     [255, 255, 0],
-        # )
-        
-        # flip() the display to put your work on screen
+        draw_util.draw_shape(surface, wing, wing_shape, surface.get_width() / fl.shape[0])
         pg.display.flip()
 
         # clock.tick(60)  # limits FPS to 60
-        i += 1
     pg.quit()

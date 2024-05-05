@@ -6,27 +6,44 @@ import util
 import draw_util
 import fluid
 
+
 def reflect(points: list[pm.Vec2d], scale: float) -> list[pm.Vec2d]:
     points = [pm.Vec2d(a, b) * scale for a, b in points]
     for point in reversed(points[1:-1]):
         points.append(pm.Vec2d(-point.x, point.y))
     return points
 
+
 # useful for making sails and things
-def create_links(a: pm.Body, pos_a: pm.Vec2d, b: pm.Body, pos_b: pm.Vec2d, num: int, width: float = 1.0) -> tuple[list[pm.Body], list[pm.Segment], list[pm.constraints.PivotJoint]]:
+def create_links(
+    a: pm.Body,
+    pos_a: pm.Vec2d,
+    b: pm.Body,
+    pos_b: pm.Vec2d,
+    num: int,
+    width: float = 1.0,
+) -> tuple[list[pm.Body], list[pm.Segment], list[pm.constraints.PivotJoint]]:
     points = [pos_a * (1 - i) + pos_b * i for i in np.linspace(0, 1, num)]
     bodies = [pm.Body() for _ in range(num)]
-    segments = [pm.Segment(bodies[i], points[i], points[i + 1], width) for i in range(num)]
+    segments = [
+        pm.Segment(bodies[i], points[i], points[i + 1], width) for i in range(num)
+    ]
     bodies_w_endpoints = [a] + bodies + [b]
-    joints = [pm.constraints.PivotJoint(bodies_w_endpoints[i], bodies_w_endpoints[i + 1], points[i]) for i in range(num + 1)]
-    
+    joints = [
+        pm.constraints.PivotJoint(
+            bodies_w_endpoints[i], bodies_w_endpoints[i + 1], points[i]
+        )
+        for i in range(num + 1)
+    ]
+
     for joint in joints:
         joint.collide_bodies = False
-    
+
     if a.space is not None:
         a.space.add(*bodies, *segments, *joints)
-    
+
     return bodies, segments, joints
+
 
 # for the rudder
 class Hinge:
@@ -52,15 +69,17 @@ class Hinge:
         # simple proportional controller
         motor.rate = self.k * (self.b.angle - self.a.angle)
 
+
 class Water(pm.Space):
     AIR = 0
     SURF = 1
     DEEP = 2
+
     def __init__(
-        self, 
-        shape: tuple[int, int], 
+        self,
+        shape: tuple[int, int],
         scale: float = 1.0,
-        wind: pm.Vec2d = pm.Vec2d.zero(), 
+        wind: pm.Vec2d = pm.Vec2d.zero(),
         current: pm.Vec2d = pm.Vec2d.zero(),
         loc: pm.Vec2d = pm.Vec2d.zero(),
     ):
@@ -73,14 +92,21 @@ class Water(pm.Space):
         self.loc = loc
 
         self.main_obj = pm.Body()
-        self.objects: dict[pm.Body, tuple[list[tuple[pm.Shape, float]], list[tuple[pm.Shape, float]], list[tuple[pm.Shape, float]]]] = {}
+        self.objects: dict[
+            pm.Body,
+            tuple[
+                list[tuple[pm.Shape, float]],
+                list[tuple[pm.Shape, float]],
+                list[tuple[pm.Shape, float]],
+            ],
+        ] = {}
 
     def add_obj(
-        self, 
-        obj: pm.Body, 
-        air: list[tuple[pm.Shape, float]] = [], 
-        surf: list[tuple[pm.Shape, float]] = [], 
-        deep: list[tuple[pm.Shape, float]] = []
+        self,
+        obj: pm.Body,
+        air: list[tuple[pm.Shape, float]] = [],
+        surf: list[tuple[pm.Shape, float]] = [],
+        deep: list[tuple[pm.Shape, float]] = [],
     ) -> None:
         self.objects[obj] = air, surf, deep
 
@@ -93,15 +119,16 @@ class Water(pm.Space):
             obj.position += shift_vec
 
     def center(self) -> None:
-        if (self.main_obj.position.x - self.shape[0] // 2) ** 2 + (self.main_obj.position.y - self.shape[1] // 2) ** 2 < 25:
+        if (self.main_obj.position.x - self.shape[0] // 2) ** 2 + (
+            self.main_obj.position.y - self.shape[1] // 2
+        ) ** 2 < 25:
             return
-        
+
         main_obj_pos = self.air.pm_to_grid(self.main_obj.position)
         i_shift = int(main_obj_pos.x - self.shape[0] // 2)
         j_shift = int(main_obj_pos.y - self.shape[1] // 2)
-        
+
         self.shift(i_shift, j_shift)
-        
 
     def step(self, dt: float):
         # any way to multi-thread this bit here?
@@ -123,7 +150,9 @@ if __name__ == "__main__":
     space = Water((500, 500), scale=10.0, current=pm.Vec2d(0, -3))
     hull = pm.Body()
     r, s = 3, 40
-    hull_poly = [[r * np.cos(i * 2 * np.pi / s), r * np.sin(i * 2 * np.pi / s)] for i in range(s)]
+    hull_poly = [
+        [r * np.cos(i * 2 * np.pi / s), r * np.sin(i * 2 * np.pi / s)] for i in range(s)
+    ]
     # hull_poly = [
     #     pm.Vec2d(0.0, 2.5),
     #     pm.Vec2d(0.5, 2.0),
@@ -132,7 +161,7 @@ if __name__ == "__main__":
     #     pm.Vec2d(0.0, -2.0),
     # ]
     # hull_poly = reflect(hull_poly, scale=space.scale)
-    
+
     hull_shape = pm.Poly(hull, hull_poly)
 
     space.add(hull, hull_shape)
@@ -144,7 +173,7 @@ if __name__ == "__main__":
     # rudder_shape = pm.Segment(rudder, rudder_a, rudder_b, 0.1)
     # rudder_hinge = Hinge(hull, rudder, rudder_a)
     space.add_obj(
-        hull, 
+        hull,
         surf=[(hull_shape, 0.75)],
         # deep=[keel]
     )
@@ -174,40 +203,41 @@ if __name__ == "__main__":
         scale = surface.get_width() / space.shape[0]
 
         def pm_to_pg(pos: pm.Vec2d) -> pm.Vec2d:
-            return util.to_int((hull.local_to_world(pos) - shift) * scale + pm.Vec2d(*surface.get_size()) * 0.5)
-        
+            return util.to_int(
+                (hull.local_to_world(pos) - shift) * scale
+                + pm.Vec2d(*surface.get_size()) * 0.5
+            )
+
         surface.fill([255, 255, 255])
 
         space.surf.draw(surface, num_arrows=20)
 
         # draw surface water
         draw_util.draw_field(surface, util.normalize(space.surf.dens), [-1, -1, 0])
-        
+
         # draw hull
         pg.draw.aalines(
-            surface, 
-            [0, 0, 0], 
-            True, 
-            [pm_to_pg(vert) for vert in hull_poly]
+            surface, [0, 0, 0], True, [pm_to_pg(vert) for vert in hull_poly]
         )
 
         # # draw rudder
         # pg.draw.aaline(
-        #     surface, 
-        #     [0, 0, 0], 
+        #     surface,
+        #     [0, 0, 0],
         #     pm_to_pg(rudder_a),
         #     pm_to_pg(rudder_a + pm.Vec2d.rotated(rudder_b - rudder_a, rudder.angle - hull.angle)),
         # )
-    
+
         pg.display.flip()
+
     # rudder.angle = 0.25 * np.pi
     draw()
     while running:
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 running = False
-        
+
         space.step(0.6)
         draw()
-        
+
         clock.tick(10)

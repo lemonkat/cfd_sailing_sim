@@ -2,9 +2,11 @@
 
 ![example screenshot](images/screenshot1.png)
 
-Each fluid is represented by 3 large arrays of floats, storing the velocity and density of the fluid.
-The values in the grids are moved along the velocity vectors via Forward Advection.
-There is also a projection step where velocities are adjusted to flow from high to low pressure.
+This program approximates the Navier-Stokes equations with 3 grids of float values, storing velocity and density of a fluid. The TensorFlow library is used to optimize everything as much as possible.
+
+Inspired by these papers:
+1. [_The Story of Airplane Wings_](https://arxiv.org/abs/2010.07446)
+2. [_Real-Time Fluid Dynamics for Games_](http://graphics.cs.cmu.edu/nsp/course/15-464/Fall09/papers/StamFluidforGames.pdf)
 
 The sailboat part is a work in progress, but an example of the fluid flowing around an object can be run by running `python3 fluid.py`.
 

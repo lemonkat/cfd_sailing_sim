@@ -73,7 +73,7 @@ def draw_vec_field(
     i_scale = surface.get_width() / field.shape[0]
     j_scale = surface.get_height() / field.shape[1]
 
-    center_shfit = -pg.Vector2(i_scale / 2, j_scale / 2)
+    center_shfit = pg.Vector2(i_scale / 2, j_scale / 2)
 
     for i, j in np.ndindex(field.shape[:2]):
         di, dj = field[i, j]

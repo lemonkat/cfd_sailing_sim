@@ -86,6 +86,33 @@ def grid(arr: tf.Tensor, *tgt_shape: list[int]) -> tf.Tensor:
 
 
 @tf.function
+def induce(
+    field: tf.Tensor, val: tf.Tensor, depth: tf.Tensor, a: tf.Tensor
+) -> tf.Tensor:
+    inv_a = 1 - a
+
+    horz_side = tf.fill((tf.shape(field)[0], depth), val * a)
+    vert_side = tf.fill((depth, tf.shape(field)[1] - 2 * depth), val * a)
+    
+    return tf.concat(
+        [
+            horz_side + field[:, :depth] * inv_a,
+            tf.concat(
+                [
+                    vert_side + field[:depth, depth:-depth] * inv_a,
+                    field[depth:-depth, depth:-depth],
+                    vert_side + field[-depth:, depth:-depth] * inv_a,
+                ],
+                axis=0,
+            ),
+            horz_side + field[:, -depth:] * inv_a,
+        ],
+        axis=1,
+    )
+
+
+
+@tf.function
 def advect(
     field: tf.Tensor, vel_i: tf.Tensor, vel_j: tf.Tensor, dt: tf.Tensor
 ) -> tf.Tensor:
@@ -114,13 +141,19 @@ def advect(
         shape=field_shape,
     )
     fc = tf.scatter_nd(
-        tf.stack([f_i, c_j], axis=2), ((1 - frac_i) * frac_j) * field, shape=field_shape
+        tf.stack([f_i, c_j], axis=2),
+        ((1 - frac_i) * frac_j) * field,
+        shape=field_shape,
     )
     cf = tf.scatter_nd(
-        tf.stack([c_i, f_j], axis=2), (frac_i * (1 - frac_j)) * field, shape=field_shape
+        tf.stack([c_i, f_j], axis=2),
+        (frac_i * (1 - frac_j)) * field,
+        shape=field_shape,
     )
     cc = tf.scatter_nd(
-        tf.stack([c_i, c_j], axis=2), (frac_i * frac_j) * field, shape=field_shape
+        tf.stack([c_i, c_j], axis=2),
+        (frac_i * frac_j) * field,
+        shape=field_shape,
     )
 
     return ff + fc + cf + cc
@@ -162,7 +195,7 @@ def get_forces(
     rr_float = tf.cast(rr, dtype=FLOAT)
     cc_float = tf.cast(cc, dtype=FLOAT)
 
-    pos_i, pos_j = (pos_i - loc_i) / scale, (pos_j - loc_j) / scale
+    pos_i, pos_j = pos_i / scale - loc_i, pos_j / scale - loc_j
     vel_i, vel_j = vel_i / scale, vel_j / scale
     vel_i = -(cc_float - pos_i) * avel + vel_i
     vel_j = (rr_float - pos_j) * avel + vel_j
@@ -244,7 +277,7 @@ def shape_to_rrcc(
     l2w = obj.local_to_world
 
     def pm_to_grid(pos: pm.Vec2d) -> pm.Vec2d:
-        return (pos - loc) / scale
+        return pos / scale - loc
 
     if isinstance(shape, pm.Circle):
         rr, cc = draw.ellipse(
@@ -265,23 +298,64 @@ def shape_to_rrcc(
     return ctt(rr, dtype=INT), ctt(cc, dtype=INT)
 
 
+# @tf.function
+# def shift_old(inputs, shift, axes, pad_val=0):
+#     assert len(shift) == len(axes)
+#     axis_shift = zip(axes, shift)
+#     axis2shift = dict(axis_shift)
+#     old_shape = inputs.shape
+
+#     for axis in axis2shift:
+#         pad_shape = list(inputs.shape)
+#         pad_shape[axis] = abs(axis2shift[axis])
+#         input_pad = tf.fill(pad_shape, pad_val)
+#         inputs = tf.concat((inputs, input_pad), axis=axis)
+
+#     input_roll = tf.roll(inputs, shift, axes)
+#     ret = tf.slice(input_roll, [0 for _ in range(len(old_shape))], old_shape)
+
+#     return ret
+
+
 @tf.function
-def shift(inputs, shift, axes, pad_val=0):
-    assert len(shift) == len(axes)
-    axis_shift = zip(axes, shift)
-    axis2shift = dict(axis_shift)
-    old_shape = inputs.shape
+def shift(field: tf.Tensor, i: tf.Tensor, j: tf.Tensor, fill: tf.Tensor) -> tf.Tensor:
+    if i < 0:
+        i = tf.abs(i)
+        field = tf.concat(
+            [
+                field[i:, :],
+                tf.fill((i, tf.shape(field)[1]), fill),
+            ],
+            axis=0,
+        )
+    elif i > 0:
+        field = tf.concat(
+            [
+                tf.fill((i, tf.shape(field)[1]), fill),
+                field[:-i, :],
+            ],
+            axis=0,
+        )
 
-    for axis in axis2shift:
-        pad_shape = list(inputs.shape)
-        pad_shape[axis] = abs(axis2shift[axis])
-        input_pad = tf.fill(pad_shape, pad_val)
-        inputs = tf.concat((inputs, input_pad), axis=axis)
+    if j < 0:
+        j = tf.abs(j)
+        field = tf.concat(
+            [
+                field[:, j:],
+                tf.fill((tf.shape(field)[0], j), fill),
+            ],
+            axis=1,
+        )
+    elif j > 0:
+        field = tf.concat(
+            [
+                tf.fill((tf.shape(field)[0], j), fill),
+                field[:, :-j],
+            ],
+            axis=1,
+        )
 
-    input_roll = tf.roll(inputs, shift, axes)
-    ret = tf.slice(input_roll, [0 for _ in range(len(old_shape))], old_shape)
-
-    return ret
+    return field
 
 
 class Fluid:
@@ -304,6 +378,10 @@ class Fluid:
             tf.constant(np.full(shape, 1, dtype=np.float32), dtype=FLOAT)
         )
 
+        ind_mask = np.full(shape, 1.0, dtype=np.float32)
+        ind_mask[3: -3, 3: -3] = 0.0
+        self._ind_mask = ctt(ind_mask, dtype=FLOAT)
+
     def run(self, steps: int, dt: float = 0.1) -> None:
         vel_i, vel_j, dens = self.vel_i, self.vel_j, self.dens
 
@@ -319,9 +397,9 @@ class Fluid:
             self.vel_i, self.vel_j, self.dens, tf.constant(dt, dtype=FLOAT)
         )
 
-        self.vel_i.assign(vel_i)
-        self.vel_j.assign(vel_j)
-        self.dens.assign(dens)
+        self.vel_i.assign(induce(vel_i, ctt(self.current[0], dtype=FLOAT), ctt(3, dtype=INT), ctt(1.0, dtype=FLOAT)))
+        self.vel_j.assign(induce(vel_j, ctt(self.current[1], dtype=FLOAT), ctt(3, dtype=INT), ctt(1.0, dtype=FLOAT)))
+        self.dens.assign(induce(dens, ctt(1.0, dtype=FLOAT), ctt(3, dtype=INT), ctt(1.0, dtype=FLOAT)))
 
     def draw(self, surface: pg.Surface, num_arrows: int = 25) -> None:
         surface.fill([255, 255, 255])
@@ -347,16 +425,12 @@ class Fluid:
     # "move" this field to be centered around position
     # pos is in PM-coordinates
     def shift(self, i: int, j: int) -> None:
-        shifts = [i, j]
-        axes = [0, 1]
+        i = ctt(i, dtype=INT)
+        j = ctt(j, dtype=INT)
 
-        self.vel_i.assign(
-            shift(self.vel_i, shifts, axes, ctt(self.current.x, dtype=FLOAT))
-        )
-        self.vel_j.assign(
-            shift(self.vel_j, shifts, axes, ctt(self.current.y, dtype=FLOAT))
-        )
-        self.dens.assign(shift(self.dens, shifts, axes, ctt(1.0, dtype=FLOAT)))
+        self.vel_i.assign(shift(self.vel_i, i, j, ctt(self.current.x, dtype=FLOAT)))
+        self.vel_j.assign(shift(self.vel_j, i, j, ctt(self.current.y, dtype=FLOAT)))
+        self.dens.assign(shift(self.dens, i, j, ctt(1.0, dtype=FLOAT)))
 
         self.loc = self.loc[0] + i, self.loc[1] + j
 
@@ -388,10 +462,12 @@ class Fluid:
             ctt(self.loc[1], dtype=FLOAT),
         )
         force = pm.Vec2d(force_i.numpy(), force_j.numpy())
+        print(force, torque.numpy())
         obj.apply_force_at_world_point(force, obj.center_of_gravity)
         obj.torque += torque.numpy()
         self.vel_i.assign(vel_i)
         self.vel_j.assign(vel_j)
+
 
 
 if __name__ == "__main__":

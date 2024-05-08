@@ -3,8 +3,8 @@ import pymunk as pm
 import pygame as pg
 
 import util
-import draw_util
 import fluid
+import draw_util
 
 
 def reflect(points: list[pm.Vec2d], scale: float) -> list[pm.Vec2d]:
@@ -132,24 +132,33 @@ class Water(pm.Space):
 
     def step(self, dt: float):
         # any way to multi-thread this bit here?
-        self.air.step(dt)
-        self.surf.step(dt)
-        self.deep.step(dt)
-        print(list(self.objects.items()))
-        for obj, data in self.objects.items():
-            for shapes, fld in zip(data, [self.air, self.surf, self.deep]):
-                for shape, weight in shapes:
-                    fld.apply_forces(obj, shape, weight)
 
         super().step(dt)
 
-        self.center()
+        self.air.step(dt)
+        self.surf.step(dt)
+        self.deep.step(dt)
+
+        for obj, data in self.objects.items():
+            for shape, weight in data[0]:
+                self.air.apply_forces(obj, shape, weight)
+
+            for shape, weight in data[1]:
+                self.surf.apply_forces(obj, shape, weight)
+
+            for shape, weight in data[2]:
+                self.deep.apply_forces(obj, shape, weight)
+
+        print(hull.torque, hull.force)
+
+        # self.center()
 
 
 if __name__ == "__main__":
-    space = Water((500, 500), scale=10.0, current=pm.Vec2d(0, -3))
+    space = Water((500, 500), scale=2.0, current=pm.Vec2d(0, 0), loc=(-250, -250))
     hull = pm.Body()
-    r, s = 3, 40
+
+    r, s = 25, 8
     hull_poly = [
         [r * np.cos(i * 2 * np.pi / s), r * np.sin(i * 2 * np.pi / s)] for i in range(s)
     ]
@@ -163,6 +172,7 @@ if __name__ == "__main__":
     # hull_poly = reflect(hull_poly, scale=space.scale)
 
     hull_shape = pm.Poly(hull, hull_poly)
+    hull_shape.density = 1.0
 
     space.add(hull, hull_shape)
 
@@ -174,7 +184,7 @@ if __name__ == "__main__":
     # rudder_hinge = Hinge(hull, rudder, rudder_a)
     space.add_obj(
         hull,
-        surf=[(hull_shape, 0.75)],
+        surf=[(hull_shape, 1.0)],
         # deep=[keel]
     )
     # space.add_obj(
@@ -191,6 +201,9 @@ if __name__ == "__main__":
 
     pg.init()
 
+    hull.angular_velocity = 1.0
+    hull.velocity = pm.Vec2d(10, 0)
+
     surface = pg.display.set_mode((1000, 1000))
 
     clock = pg.time.Clock()
@@ -199,26 +212,26 @@ if __name__ == "__main__":
     # space.surf.vel[...] = [5, 0] + util.RNG.uniform(-1, 1, space.surf.vel.shape)
 
     def draw():
-        shift = hull.position
-        scale = surface.get_width() / space.shape[0]
+        scale = surface.get_width() / (space.shape[0] * space.scale)
 
         def pm_to_pg(pos: pm.Vec2d) -> pm.Vec2d:
             return util.to_int(
-                (hull.local_to_world(pos) - shift) * scale
-                + pm.Vec2d(*surface.get_size()) * 0.5
+                (hull.local_to_world(pos) - pm.Vec2d(*space.loc) * space.scale) * scale
+                # + pm.Vec2d(*surface.get_size()) * 0.5
             )
 
         surface.fill([255, 255, 255])
 
-        space.surf.draw(surface, num_arrows=20)
+        space.surf.draw(surface, num_arrows=30)
 
         # draw surface water
-        draw_util.draw_field(surface, util.normalize(space.surf.dens), [-1, -1, 0])
+        # draw_util.draw_field(surface, util.normalize(space.surf.dens), [-1, -1, 0])
 
         # draw hull
-        pg.draw.aalines(
-            surface, [0, 0, 0], True, [pm_to_pg(vert) for vert in hull_poly]
-        )
+        draw_util.draw_shape(surface, [0, 0, 0], hull_shape, surface.get_width() / space.shape[0])
+        # pg.draw.aalines(
+        #     surface, [0, 0, 0], True, [pm_to_pg(vert) for vert in hull_poly]
+        # )
 
         # # draw rudder
         # pg.draw.aaline(
@@ -237,7 +250,8 @@ if __name__ == "__main__":
             if event.type == pg.QUIT:
                 running = False
 
-        space.step(0.6)
+        space.step(1 / 30)
+
         draw()
 
-        clock.tick(10)
+        # clock.tick(60)
